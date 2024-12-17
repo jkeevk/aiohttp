@@ -2,6 +2,7 @@ import os
 import json
 import base64
 import hashlib
+import logging
 from pydantic import ValidationError
 
 from aiohttp import web
@@ -110,15 +111,34 @@ async def orm_context(app: web.Application):
     print("Closing ORM")
 
 
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+
 @web.middleware
 async def session_middleware(request: web.Request, handler: web.RequestHandler):
     async with Session() as session:
-        print("Before request")
         request.session = session
-        result = await handler(request)
-        print("After request")
-
-        return result
+        logger.info(f"Request received: {request.method} {request.path}")
+        if request.method == "POST":
+            try:
+                body = await request.text()
+                logger.debug(f"Request body: {body}")
+            except Exception as e:
+                logger.error(f"Error reading request body: {str(e)}")
+        try:
+            result = await handler(request)
+            return result
+        except ValidationError as err:
+            logger.error(f"Validation error: {err.errors()}")
+            return web.json_response({"errors": err.errors()}, status=400)
+        except Exception as e:
+            logger.error(f"Unhandled exception: {str(e)}")
+            return web.json_response({"error": str(e)}, status=400)
+        finally:
+            logger.info(
+                f"Request processing completed: {request.method} {request.path}"
+            )
 
 
 class UserView(web.View):
@@ -224,10 +244,10 @@ app.cleanup_ctx.append(orm_context)
 app.middlewares.append(session_middleware)
 app.add_routes(
     [
+        web.post("/register", UserView),
         web.get("/user/{user_id:[0-9]+}", UserView),
         web.patch("/user/{user_id:[0-9]+}", UserView),
         web.delete("/user/{user_id:[0-9]+}", UserView),
-        web.post("/user", UserView),
         web.get("/advert/{advert_id:[0-9]+}", AdvertView),
         web.patch("/advert/{advert_id:[0-9]+}", AdvertView),
         web.delete("/advert/{advert_id:[0-9]+}", AdvertView),
